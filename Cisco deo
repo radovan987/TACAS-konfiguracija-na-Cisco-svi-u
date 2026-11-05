@@ -1,0 +1,135 @@
+configure terminal
+!
+username radovan privilege 15 secret 9 $9$ZoemL/Z6/7L9wp$TrBleqrYy8oBlTP4bjNo8f5IUjab.FAuXPckb3ZAyYI
+aaa new-model
+!
+tacacs server TARANAC-1
+ address ipv4 10.10.10.20
+ key 0 REPLACE_WITH_TACACS_SECRET
+ timeout 10
+!
+aaa group server tacacs+ TACACS_SERVERS
+ server name TARANAC-1
+!
+ip tacacs source-interface Vlan10
+!
+aaa authentication login VTY_AUTH group TACACS_SERVERS local
+!
+aaa authorization exec VTY_EXEC group TACACS_SERVERS local
+!
+aaa authorization commands 0 VTY_COMMANDS group TACACS_SERVERS local
+aaa authorization commands 1 VTY_COMMANDS group TACACS_SERVERS local
+aaa authorization commands 15 VTY_COMMANDS group TACACS_SERVERS local
+!
+aaa authorization config-commands
+!
+aaa accounting exec VTY_ACCOUNTING start-stop group TACACS_SERVERS
+aaa accounting commands 0 VTY_ACCOUNTING stop-only group TACACS_SERVERS
+aaa accounting commands 1 VTY_ACCOUNTING stop-only group TACACS_SERVERS
+aaa accounting commands 15 VTY_ACCOUNTING stop-only group TACACS_SERVERS
+!
+end
+
+configure terminal
+!
+line vty 0 15
+ login authentication VTY_AUTH
+ authorization exec VTY_EXEC
+ authorization commands 0 VTY_COMMANDS
+ authorization commands 1 VTY_COMMANDS
+ authorization commands 15 VTY_COMMANDS
+ accounting exec VTY_ACCOUNTING
+ accounting commands 0 VTY_ACCOUNTING
+ accounting commands 1 VTY_ACCOUNTING
+ accounting commands 15 VTY_ACCOUNTING
+ transport input ssh
+ exec-timeout 10 0
+!
+end
+
+OPCIONO
+
+aaa authentication enable default group TACACS_SERVERS enable
+
+Ta komanda određuje kako se proverava lozinka kada na Cisco sviču ukucaš enable, odnosno prelaziš iz > u #.
+| Deo komande | Značenje |
+|---|---|
+| `authentication enable` | Autentifikacija za pristup privilegovanom EXEC režimu. |
+| `default` | Podrazumevana lista za tu proveru. |
+| `group tacacs+` | Prvo pokušaj proveru preko konfigurisanih TACACS+ servera. |
+| Poslednje `enable` | Rezervno koristi lokalni `enable secret`, odnosno `enable password` ako secret nije podešen. |
+
+U ovom slučaju:
+- Ako posle SSH prijave odmah dobijaš privilege 15 i prompt #, ova provera ti nije potrebna za tu prijavu.
+- Ako dobiješ >, pa želiš da prelazak preko komande enable proverava TacGUI, onda je dodaješ.
+- Nije falila za raniji problem sa početnom prijavom. Tu se koristila lista VTY_AUTH. Bez posebne AAA liste za enable, IOS koristi lokalnu enable lozinku.
+
+AAA autorizacija na konzoli je podrazumevano isključena. Ova komanda omogućava da se na konzolnoj sesiji primeni EXEC autorizacija i nivo privilegija dobijen od TACACS+ servera. cisco.com
+
+Uz već podešenu autentifikaciju na konzoli, primer za tvoju grupu servera je:
+aaa authorization console
+aaa authorization exec CONSOLE_EXEC group TACACS_SERVERS local
+!
+line console 0
+ authorization exec CONSOLE_EXEC
+
+Ako TACACS+ pri EXEC autorizaciji vrati priv-lvl=15, posle uspešne konzolne prijave odmah dobijaš #. Sama komanda aaa authorization console zahteva i odgovarajuću listu autorizacije primenjenu na konzoli. cisco.com
+
+Razlika u odnosu na prethodnu komandu je:
+- aaa authorization console + EXEC autorizacija — određuje prava i privilege level odmah pri konzolnoj prijavi.
+- aaa authentication enable ... — proverava lozinku kada iz prompta > naknadno ukucaš enable.
+
+
+EXEC autorizacija proverava da li smeš da dobiješ CLI sesiju i sa kojim privilegijama. Autorizacija komandi proverava šta smeš da izvršavaš u toj sesiji.
+
+U tvojoj konfiguraciji to su tri povezane stvari.
+
+1. aaa authorization exec — početak CLI sesije
+aaa authorization exec VTY_EXEC group TACACS_SERVERS local
+
+Posle uspešne provere korisničkog imena i lozinke, svič pita TACACS+ server da li sme da otvori EXEC sesiju i koje atribute da primeni. Ako server vrati priv-lvl=15, odmah dobijaš privilegovani prompt #. Ova provera se radi pri otvaranju sesije. Cisco
+
+2. aaa authorization commands — pojedinačne komande
+aaa authorization commands 15 VTY_COMMANDS group TACACS_SERVERS local
+
+Svič šalje serveru na proveru komande koje pripadaju nivou 15, recimo show running-config ili configure terminal. Broj 15 označava nivo komande. Zato si podesio i nivoe 0 i 1, da proveravaš i komande koje njima pripadaju. Cisco
+
+3. aaa authorization config-commands — komande unutar konfiguracionog režima
+aaa authorization config-commands
+
+Ovim uključuješ proveru i komandi koje kucaš na promptovima (config)#, (config-if)# itd. One koriste već podešene liste za command authorization, npr. VTY_COMMANDS. cisco.com
+Šta se dešava	Koja autorizacija to proverava
+Posle logina dobijaš CLI i privilege level	EXEC
+Na SW1# kucaš show running-config	Commands
+Na SW1# kucaš configure terminal	Commands — to je komanda za ulazak u konfiguracioni režim
+Na SW1(config)# kucaš hostname NOVO_IME	Commands, prošireno na konfiguracioni režim pomoću config-commands
+
+
+Dakle, korisnik može uspešno da dobije privilege 15, a da mu TACACS+ zatim zabrani configure terminal ili određenu konfiguracionu komandu. Privilege level i dozvola za pojedinačnu komandu proveravaju se zasebno.
+
+Ako si u CLI pomoći video i aaa authorization configuration, ta ključna reč služi za preuzimanje konfiguracije sa AAA servera. Za kontrolu onoga što korisnik kuca koristiš commands i config-commands.
+
+Podrazumevano na Cisco IOS-u:
+
+Nivo 0 ima ovih pet komandi:
+disable
+enable
+exit
+help
+logout
+
+To su osnovne komande za pomoć, promenu nivoa i završavanje sesije. Cisco
+
+Nivo 1 obuhvata uobičajene korisničke EXEC komande za pregled i osnovnu dijagnostiku, na primer:
+show version
+show interfaces
+show ip interface brief
+show ip route
+show clock
+show users
+ping
+traceroute
+telnet
+ssh
+
+Zato sa prompta > možeš da pregledaš stanje i testiraš povezanost. show running-config, show startup-config, configure terminal, reload i većina administrativnih komandi podrazumevano pripadaju nivou 15.
